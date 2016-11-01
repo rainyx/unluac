@@ -1,5 +1,6 @@
 package unluac.decompile;
 
+import java.nio.charset.Charset;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -43,7 +44,7 @@ public class Constant {
   private final boolean bool;
   private final LNumber number;
   private final String string;
-  
+
   public Constant(int constant) {
     type = 2;
     bool = false;
@@ -76,8 +77,49 @@ public class Constant {
       throw new IllegalArgumentException("Illegal constant type: " + constant.toString());
     }
   }
+
+  public static int isUTF8(String buff, int startIndex) {
+    int utf8length;
+    int c = buff.charAt(startIndex) & 0xFF;
+    if (c < 0x80) {
+      utf8length = 1;
+    } else if (c < 0xC) {
+      utf8length = 0;
+      return utf8length;
+    } else if (c < 0xE0) {
+      utf8length = 2;
+    } else if (c < 0xF0) {
+      utf8length = 3;
+    } else if (c < 0xF8) {
+      utf8length = 4;
+    } else if (c < 0xFC) {
+      utf8length = 5;
+    } else if (c < 0xFE) {
+      utf8length = 6;
+    } else {
+      utf8length = 0;
+      return utf8length;
+    }
+
+    // Out of index.
+    if (utf8length > (buff.length() - startIndex)) {
+      utf8length = 0;
+      return utf8length;
+    }
+
+    for (int i=startIndex+1;i < startIndex + utf8length; i++) {
+      c = buff.charAt(i) & 0xFF;
+      if ((c & 0xC0) != 0x80) {
+        utf8length = 0;
+        return utf8length;
+      }
+    }
+
+    return utf8length;
+  }
   
   public void print(Decompiler d, Output out, boolean braced) {
+
     switch(type) {
       case 0:
         out.print("nil");
@@ -89,86 +131,46 @@ public class Constant {
         out.print(number.toString());
         break;
       case 3:
-        int newlines = 0;
-        int unprintable = 0;
-        boolean rawstring = d.getConfiguration().rawstring;
-        for(int i = 0; i < string.length(); i++) {
-          char c = string.charAt(i);
-          if(c == '\n') {
-            newlines++;
-          } else if((c <= 31 && c != '\t') || c >= 127) {
-            unprintable++;
-          }
-        }
-        boolean longString = (newlines > 1 || (newlines == 1 && string.indexOf('\n') != string.length() - 1)); // heuristic
-        longString = longString && unprintable == 0; // can't escape and for robustness, don't want to allow non-ASCII output
-        longString = longString && !string.contains("[["); // triggers compatibility error in 5.1 TODO: avoidable?
-        if(d.function.header.version == Version.LUA50) {
-          longString = longString && !string.contains("]]") && !string.endsWith("]"); // no piping TODO: allow proper nesting
-        }
-        if(longString) {
-          int pipe = 0;
-          String pipeString = "]]";
-          String startPipeString = "]";
-          while(string.endsWith(startPipeString) || string.indexOf(pipeString) >= 0) {
-            pipe++;
-            pipeString = "]";
-            int i = pipe;
-            while(i-- > 0) pipeString += "=";
-            startPipeString = pipeString;
-            pipeString += "]";
-          }
-          if(braced) out.print("(");
-          out.print("[");
-          while(pipe-- > 0) out.print("=");
-          out.print("[");
-          int indent = out.getIndentationLevel();
-          out.setIndentationLevel(0);
-          out.println();
-          out.print(string);
-          out.print(pipeString);
-          if(braced) out.print(")");
-          out.setIndentationLevel(indent);
-        } else {
-          out.print("\"");
-          for(int i = 0; i < string.length(); i++) {
+        out.print("\"");
+        if (true) {
+          int utf8length = 0;
+          for (int i = 0; i < string.length(); i++) {
             char c = string.charAt(i);
-            if(c <= 31 || c >= 127) {
-              if(c == 7) {
-                out.print("\\a");
-              } else if(c == 8) {
-                out.print("\\b");
-              } else if(c == 12) {
-                out.print("\\f");
-              } else if(c == 10) {
-                out.print("\\n");
-              } else if(c == 13) {
-                out.print("\\r");
-              } else if(c == 9) {
-                out.print("\\t");
-              } else if(c == 11) {
-                out.print("\\v");
-              } else if(!rawstring || c <= 127) {
-                String dec = Integer.toString(c);
-                int len = dec.length();
-                out.print("\\");
-                while(len++ < 3) {
-                  out.print("0");
-                }
-                out.print(dec);
-              } else {
-                out.print((byte)c);
-              }
-            } else if(c == 34) {
+            if (c == 7) {
+              out.print("\\a");
+            } else if (c == 8) {
+              out.print("\\b");
+            } else if (c == 12) {
+              out.print("\\f");
+            } else if (c == 10) {
+              out.print("\\n");
+            } else if (c == 13) {
+              out.print("\\r");
+            } else if (c == 9) {
+              out.print("\\t");
+            } else if (c == 11) {
+              out.print("\\v");
+            } else if (c == 34) {
               out.print("\\\"");
-            } else if(c == 92) {
+            } else if (c == 92) {
               out.print("\\\\");
             } else {
-              out.print(Character.toString(c));
+              if (c >= 0x20 && c <= 0x7F) {
+                out.print(Character.toString(c));
+              } else if ((utf8length = isUTF8(string, i)) > 1) {
+                for (int j=i; j<i+utf8length; j++) {
+                  char cc = string.charAt(j);
+                  out.print((byte)cc);
+                }
+                i += (utf8length - 1);
+              } else {
+                String str = String.format("\\%02X", c & 0xFF);
+                out.print(str);
+              }
             }
           }
-          out.print("\"");
         }
+        out.print("\"");
         break;
       default:
         throw new IllegalStateException();
